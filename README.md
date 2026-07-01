@@ -100,7 +100,20 @@ Developed and tested with:
 MIT License
 
 ---
+## ⚠️ Important Notes
 
+### API Password
+- The password in `config.ini` is stored in **plain text**.
+- The application **automatically hashes it to MD5** before sending it to the PBX API.
+- This is required by the Yeastar API v2.0 authentication mechanism.
+
+### PBX API Must Be Enabled
+- The application **will not work** if the Yeastar API is **disabled** on your PBX.
+- Before using this tool, make sure:
+  1. Log in to your Yeastar PBX web interface.
+  2. Go to **Configuration → PBX → General Settings → API**.
+  3. Enable the API and set the username/password.
+  4. The username/password in `config.ini` must match the API settings.
 ## Disclaimer
 
 This project is not affiliated with or endorsed by Yeastar.
@@ -108,3 +121,4 @@ This project is not affiliated with or endorsed by Yeastar.
 Always create a PBX backup before performing bulk configuration changes.
 
 Use this software at your own risk.
+
