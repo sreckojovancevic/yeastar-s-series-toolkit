@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yeastar Extension Manager - Fixed API Error 10017 & Smart Bulk Update
+Yeastar Extension Manager - Full Version with BusyForward Bulk Fix
 """
 
 import hashlib
@@ -337,6 +337,37 @@ HTML = """
                 });
         }
 
+        function filterExtensions() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const filtered = extensions.filter(ext =>
+                ext.number.includes(query) ||
+                (ext.username && ext.username.toLowerCase().includes(query))
+            );
+            renderExtensions(filtered);
+        }
+
+        function showDetail(extNumber) {
+            selectedExt = extNumber;
+            document.getElementById('detailPanel').classList.add('show');
+            document.getElementById('detailTitle').textContent = `✏️ Ekstenzija ${extNumber}`;
+            document.getElementById('saveStatus').textContent = '';
+            document.getElementById('saveExtBtn').disabled = true;
+
+            fetch(`/api/extension/${extNumber}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('detailContent').innerHTML = `<div style="color:#f44336;">❌ ${data.error}</div>`;
+                        return;
+                    }
+                    renderDetail(data);
+                    document.getElementById('saveExtBtn').disabled = false;
+                })
+                .catch(err => {
+                    document.getElementById('detailContent').innerHTML = `<div style="color:#f44336;">❌ Greška: ${err.message}</div>`;
+                });
+        }
+
         function renderDetail(data) {
             const ext = data.extinfos ? data.extinfos[0] : data;
             const fields = [
@@ -436,14 +467,14 @@ HTML = """
         }
 
         function downloadTemplate() {
-            const headers = 'extension,prefix,mobile,ringtimeout\\n';
-            const sample = '150,063,8831470,12\\n151,064,1234567,12';
+            const headers = 'ext_number,alwaysforward,noanswerforward,busyforward,ntransferto,btransferto,ntransferprefix,btransferprefix,ntransfernum,btransfernum,ringtimeout,maxduration,callrestriction,dnd\\n';
+            const sample = '150,off,on,on,Custom Number,Custom Number,64,64,8703312,8703312,10,,off,off';
             const blob = new Blob([headers + sample], {type: 'text/csv'});
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = 'extensions_template.csv';
+            a.download = 'extensions_bulk_template.csv';
             a.click();
-            showToast('📥 Template preuzet', 'success');
+            showToast('📥 Šablon preuzet', 'success');
         }
 
         function previewBulk() {
@@ -469,7 +500,7 @@ HTML = """
             formData.append('test_mode', document.getElementById('bulkTestMode').checked ? 'true' : 'false');
 
             document.getElementById('bulkResults').classList.remove('hidden');
-            document.getElementById('bulkLog').textContent = '⏳ Obrada...';
+            document.getElementById('bulkLog').textContent = '⏳ Obrada u toku...';
             fetch('/api/bulk/upload', { method: 'POST', body: formData })
                 .then(res => res.json())
                 .then(data => {
@@ -647,41 +678,57 @@ def bulk_upload():
         failed = 0
 
         for i, row in enumerate(rows, 1):
-            # Podrška za standardni format ili tvoj uprošćeni format ('extension')
             ext_num = row.get("ext_number", row.get("extension", row.get("username", ""))).strip()
             if not ext_num:
                 add_log(f"⚠️ Red {i}: preskačem (prazan broj ekstenzije)")
                 continue
 
-            # Detekcija tvog formata (ako u fajlu postoje 'prefix' ili 'mobile' kolone)
-            is_simplified = 'prefix' in row or 'mobile' in row
-
             # --------------------------------------------------------
-            # 1. PAKET: Podaci i rute
+            # 1. PAKET: Glavni podaci i sva Forward pravila
             # --------------------------------------------------------
             main_payload = {
                 "number": ext_num
             }
 
-            if is_simplified:
-                # TVOJ FORMAT: Automatski konfiguriše preusmerenje
-                mobile_val = row.get('mobile', '').strip()
-                if mobile_val:
-                    main_payload['noanswerforward'] = 'on'
-                    main_payload['ntransferto'] = 'Custom Number'
-                    main_payload['ntransferprefix'] = row.get('prefix', '').strip()
-                    main_payload['ntransfernum'] = mobile_val
-            else:
-                # STANDARDNI FORMAT: Menja samo ono što je uneto (štiti prazna polja)
-                if 'noanswerforward' in row and row.get('noanswerforward').strip() != "":
-                    nav = row.get('noanswerforward').strip()
-                    main_payload['noanswerforward'] = nav
-                    if nav == 'on':
-                        main_payload['ntransferto'] = row.get('ntransferto', 'Voicemail').strip()
-                        main_payload['ntransferprefix'] = row.get('ntransferprefix', '').strip()
-                        main_payload['ntransfernum'] = row.get('ntransfernum', '').strip()
+            is_simplified_on = 'prefix' in row or 'mobile' in row
+            mobile_val = row.get('mobile', '').strip() if is_simplified_on else ""
 
-            # Preslikavanje ostalih polja ako postoje
+            if is_simplified_on and mobile_val:
+                # TVOJ UPROŠĆENI FORMAT (samo prefix i mobile)
+                main_payload['noanswerforward'] = 'on'
+                main_payload['ntransferto'] = 'Custom Number'
+                main_payload['ntransferprefix'] = row.get('prefix', '').strip()
+                main_payload['ntransfernum'] = mobile_val
+            else:
+                # TVOJ KOMPLETAN CSV ŠABLON (1extensions_bulk_ready.csv)
+                
+                # --- NO ANSWER FORWARD ---
+                if 'noanswerforward' in row:
+                    nav = row.get('noanswerforward', '').strip().lower()
+                    if nav in ['on', 'off']:
+                        main_payload['noanswerforward'] = nav
+                        if nav == 'on':
+                            main_payload['ntransferto'] = row.get('ntransferto', 'Voicemail').strip()
+                            main_payload['ntransferprefix'] = row.get('ntransferprefix', '').strip()
+                            main_payload['ntransfernum'] = row.get('ntransfernum', '').strip()
+
+                # --- BUSY FORWARD ---
+                if 'busyforward' in row:
+                    bf = row.get('busyforward', '').strip().lower()
+                    if bf in ['on', 'off']:
+                        main_payload['busyforward'] = bf
+                        if bf == 'on':
+                            main_payload['btransferto'] = row.get('btransferto', 'Voicemail').strip()
+                            main_payload['btransferprefix'] = row.get('btransferprefix', '').strip()
+                            main_payload['btransfernum'] = row.get('btransfernum', '').strip()
+
+                # --- ALWAYS FORWARD ---
+                if 'alwaysforward' in row:
+                    alw = row.get('alwaysforward', '').strip().lower()
+                    if alw in ['on', 'off']:
+                        main_payload['alwaysforward'] = alw
+
+            # Preslikavanje ostalih tekstualnih polja ako nisu prazna
             for key in ["username", "fullname", "email", "callrestriction", "dnd"]:
                 if row.get(key) and row.get(key).strip() != "":
                     if key == "fullname":
@@ -690,15 +737,14 @@ def bulk_upload():
                         main_payload[key] = row.get(key).strip()
 
             # --------------------------------------------------------
-            # 2. PAKET: Tajmeri (Izolovano slanje radi greške 10017)
+            # 2. PAKET: Tajmeri (Ringtimeout / Maxduration)
             # --------------------------------------------------------
             time_payload = {
                 "number": ext_num
             }
             has_time = False
 
-            if is_simplified:
-                # TVOJ FORMAT: uzmi ringtimeout iz kolone ako postoji, ili podrazumevaj 12
+            if is_simplified_on and mobile_val:
                 rt_val = row.get('ringtimeout', '12').strip()
                 time_payload['ringtimeout'] = rt_val if rt_val.isdigit() else '12'
                 has_time = True
@@ -709,23 +755,22 @@ def bulk_upload():
                         has_time = True
 
             # --------------------------------------------------------
-            # SLANJE CENTRALISTIČKIH API ZAHTEVA (SPLIT-PAYLOAD)
+            # SLANJE NA CENTRALU
             # --------------------------------------------------------
             try:
-                # Prvi poziv (podaci i forward)
-                api_request('extension/update', main_payload)
+                if len(main_payload) > 1:
+                    api_request('extension/update', main_payload)
                 
-                # Drugi poziv (tajmer)
                 if has_time:
                     api_request('extension/update', time_payload)
                     
-                add_log(f"✅ [{i}] Lokal {ext_num} uspešno ažuriran")
+                add_log(f"✅ [{i}] Lokal {ext_num} uspešno ažuriran (uneta sva forward pravila)")
                 success += 1
             except Exception as e:
                 add_log(f"❌ [{i}] Lokal {ext_num} Greška: {e}")
                 failed += 1
 
-        add_log(f"\n📊 REZULTAT: ✅ Uspešno: {success} | ❌ Neuspešno: {failed} | 📊 Ukupno obrađeno: {len(rows) if not test_mode else 1}")
+        add_log(f"\n📊 REZULTAT: ✅ Uspešno: {success} | ❌ Neuspešno: {failed} | 📊 Ukupno: {len(rows)}")
 
         return jsonify({
             "success": success,
@@ -743,6 +788,6 @@ def bulk_upload():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("☎️ Yeastar Extension Manager (Smart Bulk Update Fix)")
+    print("☎️ Yeastar Extension Manager (Full Version Active)")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=True)
